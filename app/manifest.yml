@@ -1,0 +1,276 @@
+modules:
+  jira:issuePanel:
+    - key: traceguard-issue-panel
+      resource: panel
+      resolver:
+        function: resolver
+      render: native
+      title: TraceGuard
+      icon: https://developer.atlassian.com/platform/forge/images/icons/issue-panel-icon.svg
+  jira:projectPage:
+    - key: traceguard-audit
+      resource: audit
+      resolver:
+        function: resolver
+      render: native
+      title: TraceGuard audit
+  macro:
+    - key: traceguard-matrix
+      resource: macro
+      resolver:
+        function: resolver
+      render: native
+      title: TraceGuard traceability
+      description: Live traceability matrix, gaps and ASIL coverage of a Jira project (ASPICE, ISO 26262).
+      config: true
+  rovo:agent:
+    - key: traceability-auditor
+      name: Traceability Auditor
+      description: Finds ASPICE and ISO 26262 traceability gaps in Jira, proposes links and tests, and publishes the audit report to Confluence.
+      prompt: |
+        You are the Traceability Auditor, an assistant for automotive software teams that work to
+        Automotive SPICE (ASPICE) and ISO 26262. You help engineers, safety managers and quality
+        assurance find and close traceability gaps before an assessment or a release.
+
+        The trace model lives in Jira and is read by TraceGuard:
+        - Levels: safety goal (SG), system requirement (SYS), software requirement (SWR), test case (TEST).
+        - A lower-level requirement derives from its parent; a test case verifies a requirement.
+        - ASIL is QM, A, B, C or D. A requirement without its own ASIL inherits the strictest ASIL of
+          its ancestors. ASIL C and D need at least two passing tests, one of them fault injection or
+          back-to-back (ISO 26262-6). Safety goals are validated at vehicle level and hardware-allocated
+          requirements are verified elsewhere, so both are outside software verification coverage.
+        - A link is suspect when the requirement text changed after its test last ran.
+
+        How you work:
+        1. Find out which Jira project to audit. If the user is on a Jira issue or project, use that
+           project; otherwise ask for the project key, for example BRK.
+        2. Get every fact from the TraceGuard actions. Never invent issue keys, test results, ASILs or
+           coverage numbers. Use the url fields to link items.
+        3. For an overview call get-coverage-by-asil and get-trace-gaps. For one requirement or test
+           call get-item-trace. For the full table call get-trace-matrix.
+        4. Present gaps highest severity first. For each gap give the item, what is missing, the fix
+           and the standard reference. Group many gaps by rule and keep the answer short.
+        5. Link suggestions come from text similarity. Show them as proposals. Call create-trace-link
+           only after the user confirms that exact link.
+        6. Before publish-audit-report, ask for the Confluence space key and confirm.
+        7. Answer in the language the user writes in. Use tables for more than three items.
+      conversationStarters:
+        - Audit the traceability of this project
+        - Which ASIL C and D requirements are not verified?
+        - Suggest links for tests that verify nothing
+        - Publish the audit report to Confluence
+      actions:
+        - get-trace-gaps
+        - get-coverage-by-asil
+        - get-trace-matrix
+        - get-item-trace
+        - get-link-suggestions
+        - get-audit-report
+        - create-trace-link
+        - publish-audit-report
+  rovo:mcp:
+    - key: traceguard-mcp
+      name: TraceGuard
+      tools:
+        - get-trace-gaps
+        - get-coverage-by-asil
+        - get-trace-matrix
+        - get-item-trace
+        - get-link-suggestions
+        - get-audit-report
+        - create-trace-link
+        - publish-audit-report
+  action:
+    - key: get-trace-gaps
+      name: Get traceability gaps
+      function: action-gaps
+      actionVerb: GET
+      description: |
+        Lists traceability gaps of a Jira project, highest severity first: unverified or orphan items,
+        too few or failing tests for the ASIL, ASIL downgrades, suspect and broken links. Each gap has
+        a fix, the ASPICE or ISO 26262 reference and a Jira link.
+      inputs:
+        projectKey:
+          title: Project key
+          type: string
+          required: false
+          description: Key of the Jira project, for example BRK. Defaults to the project the user is viewing.
+        severity:
+          title: Severity
+          type: string
+          required: false
+          description: Only return gaps of this severity, high, medium or low.
+        limit:
+          title: Limit
+          type: integer
+          required: false
+          description: Maximum number of gaps to return, 1 to 200. Defaults to 50.
+    - key: get-coverage-by-asil
+      name: Get verification coverage by ASIL
+      function: action-coverage
+      actionVerb: GET
+      description: |
+        Returns the share of software-allocated requirements that are verified, overall and per ASIL
+        (D, C, B, A, QM), with the number of requirements, test cases and gaps.
+      inputs:
+        projectKey:
+          title: Project key
+          type: string
+          required: false
+          description: Key of the Jira project, for example BRK. Defaults to the project the user is viewing.
+    - key: get-trace-matrix
+      name: Get traceability matrix
+      function: action-matrix
+      actionVerb: GET
+      description: |
+        Returns the traceability matrix of a Jira project: each safety goal, system and software
+        requirement with its ASIL, parents, derived requirements, verifying tests with method and
+        result, and its status (verified, open, hardware, vehicle-level).
+      inputs:
+        projectKey:
+          title: Project key
+          type: string
+          required: false
+          description: Key of the Jira project, for example BRK. Defaults to the project the user is viewing.
+        level:
+          title: Level
+          type: string
+          required: false
+          description: Only return one level, SG, SYS or SWR.
+        onlyOpen:
+          title: Only open
+          type: boolean
+          required: false
+          description: When true, only return software-allocated requirements that are not verified yet.
+    - key: get-item-trace
+      name: Get trace of one item
+      function: action-item
+      actionVerb: GET
+      description: |
+        Explains one requirement or test case: its chain up to the safety goal, effective ASIL and
+        where it is inherited from, parents, derived requirements, verifying tests, verification
+        status, its gaps and suggested links.
+      inputs:
+        issueKey:
+          title: Issue key or requirement ID
+          type: string
+          required: false
+          description: Jira issue key such as BRK-15 or a requirement ID such as SWR-3. Defaults to the issue the user is viewing.
+        projectKey:
+          title: Project key
+          type: string
+          required: false
+          description: Key of the Jira project. Needed when the item is given by a requirement ID.
+    - key: get-link-suggestions
+      name: Get suggested trace links
+      function: action-suggestions
+      actionVerb: GET
+      description: |
+        Proposes missing links found by text similarity: requirements for tests that verify nothing,
+        tests for unverified software requirements, and parents for orphan software requirements.
+        Every suggestion must be confirmed by the user before it is created.
+      inputs:
+        projectKey:
+          title: Project key
+          type: string
+          required: false
+          description: Key of the Jira project, for example BRK. Defaults to the project the user is viewing.
+    - key: get-audit-report
+      name: Get audit report
+      function: action-report
+      actionVerb: GET
+      description: |
+        Returns the audit-ready traceability report of a Jira project in Markdown: coverage by ASIL,
+        every gap with fix and reference, and the suggested links.
+      inputs:
+        projectKey:
+          title: Project key
+          type: string
+          required: false
+          description: Key of the Jira project, for example BRK. Defaults to the project the user is viewing.
+    - key: create-trace-link
+      name: Create trace link
+      function: action-link
+      actionVerb: CREATE
+      description: |
+        Creates one trace link in Jira after the user confirmed it. linkType is verifies (fromKey is
+        the test case), verified-by (fromKey is the requirement) or derives (fromKey is the lower-level
+        requirement, toKey its parent).
+      inputs:
+        fromKey:
+          title: From
+          type: string
+          required: true
+          description: Jira issue key or requirement ID of the lower end of the link.
+        toKey:
+          title: To
+          type: string
+          required: true
+          description: Jira issue key or requirement ID of the other end.
+        linkType:
+          title: Link type
+          type: string
+          required: true
+          description: verifies, verified-by or derives.
+        projectKey:
+          title: Project key
+          type: string
+          required: false
+          description: Key of the Jira project. Needed when items are given by requirement ID.
+    - key: publish-audit-report
+      name: Publish audit report to Confluence
+      function: action-publish
+      actionVerb: CREATE
+      description: |
+        Publishes the traceability audit of a Jira project as a new Confluence page in the given space,
+        with coverage, gaps, the full matrix linked to Jira and a sign-off table. Returns the page URL.
+      inputs:
+        spaceKey:
+          title: Confluence space key
+          type: string
+          required: true
+          description: Key of the Confluence space to publish in, for example ENG.
+        projectKey:
+          title: Project key
+          type: string
+          required: false
+          description: Key of the Jira project, for example BRK. Defaults to the project the user is viewing.
+  function:
+    - key: resolver
+      handler: index.handler
+    - key: action-gaps
+      handler: index.actionGaps
+    - key: action-coverage
+      handler: index.actionCoverage
+    - key: action-matrix
+      handler: index.actionMatrix
+    - key: action-item
+      handler: index.actionItem
+    - key: action-suggestions
+      handler: index.actionSuggestions
+    - key: action-report
+      handler: index.actionReport
+    - key: action-link
+      handler: index.actionLink
+    - key: action-publish
+      handler: index.actionPublish
+resources:
+  - key: panel
+    path: src/frontend/panel.jsx
+  - key: audit
+    path: src/frontend/audit.jsx
+  - key: macro
+    path: src/frontend/macro.jsx
+permissions:
+  scopes:
+    - read:jira-work
+    - write:jira-work
+    - manage:jira-configuration
+    - read:space:confluence
+    - write:page:confluence
+app:
+  runtime:
+    name: nodejs24.x
+    memoryMB: 256
+    architecture: arm64
+  id: ari:cloud:ecosystem::app/0f49570e-2b19-40cf-ad9c-e04bf8b374bb

@@ -1,0 +1,12 @@
+{
+  "name": "@traceguard/core",
+  "version": "0.1.0",
+  "description": "ASPICE / ISO 26262 traceability analysis: gaps, matrix, ASIL coverage, link suggestions",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "node --test test/",
+    "demo": "node cli.js demo"
+  },
+  "license": "MIT"
+}

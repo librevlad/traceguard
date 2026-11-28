@@ -9,6 +9,8 @@ Built on Atlassian Forge for Codegeist 2026. Runs on Atlassian: no external serv
 
 **[Watch the demo video (2:40)](https://youtu.be/bkkk_oMemOg)**
 
+[![test](https://github.com/librevlad/traceguard/actions/workflows/test.yml/badge.svg)](https://github.com/librevlad/traceguard/actions/workflows/test.yml)
+
 ## Install
 
 **[Install TraceGuard on your Atlassian site](https://developer.atlassian.com/console/install/0f49570e-2b19-40cf-ad9c-e04bf8b374bb?signature=AYABeGxS%2FqfHOPdmC0TDZmoyklAAAAADAAdhd3Mta21zAEthcm46YXdzOmttczp1cy13ZXN0LTI6NzA5NTg3ODM1MjQzOmtleS83MDVlZDY3MC1mNTdjLTQxYjUtOWY5Yi1lM2YyZGNjMTQ2ZTcAuAECAQB4CxqLTo9l4lqXuFjNim1xJM%2Bp%2F3TVP9xHS2BrU5DRRucBQK0r6uPvULb79FS8bit11wAAAH4wfAYJKoZIhvcNAQcGoG8wbQIBADBoBgkqhkiG9w0BBwEwHgYJYIZIAWUDBAEuMBEEDE2GnQDyYC1dZP7RQgIBEIA7QPo1NVhn8yN%2FLqaXk4iPvPKb13jFu4lsx98HiNMwNWYyH2PECkK7Y1selp7SDezLc%2BRoEClxGQNFK94AB2F3cy1rbXMAS2Fybjphd3M6a21zOmV1LXdlc3QtMTo3MDk1ODc4MzUyNDM6a2V5LzQ2MzBjZTZiLTAwYzMtNGRlMi04NzdiLTYyN2UyMDYwZTVjYwC4AQICAHi9bVMAkme4qVQX1fQHo6ePw3H40A7cGfz7yrmSfBWMXgFAqMgDcui5N1bGy90KRQyLAAAAfjB8BgkqhkiG9w0BBwagbzBtAgEAMGgGCSqGSIb3DQEHATAeBglghkgBZQMEAS4wEQQMKttTg9z%2FeBohSvXOAgEQgDtAJPlw2CB2TLpPxkrTn%2FqjAWb3A7lNlxdJtbJ1LRRdfI%2F%2BenviW9WvOMAWngbScQ4ABU0qVr%2FSU38JTgAHYXdzLWttcwBLYXJuOmF3czprbXM6dXMtZWFzdC0xOjcwOTU4NzgzNTI0MzprZXkvNmMxMjBiYTAtNGNkNS00OTg1LWI4MmUtNDBhMDQ5NTJjYzU3ALgBAgIAeDYASx0XCjkny4iLV6vz%2BKtEGSGT6kdt0QRpkn6D%2FlVEAeLqHaOv27%2BBDJrOssfq%2BvMAAAB%2BMHwGCSqGSIb3DQEHBqBvMG0CAQAwaAYJKoZIhvcNAQcBMB4GCWCGSAFlAwQBLjARBAyixYgZgqtDjz5dnf8CARCAO6zPp2e9lb9a5TUhwMXQJUbYhWHeRr2qmE9mVbBbABMY3KZhYCnNdhVC2NA5AJwFoEmlj0rNrD8F0yv2AgAAAAAMAAAQAAAAAAAAAAAAAAAAAC8u5qB1SCYoLK7pkTgs%2Byb%2F%2F%2F%2F%2FAAAAAQAAAAAAAAAAAAAAAQAAADLdYWRx4u6MAqmiaGM6jwi3pT049Rf%2Bs5kkzGSX0fmHdaE41jRMwkWMOaMARkX8xaoqZbimfO5Mu0OwhnOuO02Jed4%3D&product=jira&product=confluence)** — Jira and Confluence, Atlassian Cloud.
@@ -19,11 +21,19 @@ and select **Load the brake ECU demo** to see a full audit in a minute.
 
 | Where | What |
 |---|---|
-| Jira issue panel | The trace of a requirement or test up to its safety goal, the effective ASIL (with inheritance), verifying tests and their results, gaps with fixes, suggested links that you create with one click, and recording a test result. |
-| Jira project page | The full audit: verification coverage overall and per ASIL, every gap with severity, fix and standard reference, the traceability matrix, suggested links, and an audit report published to Confluence. |
+| Jira issue view | A **Traceability** button on every issue with its status at a glance (*2 gaps*, *verified*, *failed*); it opens the trace. The same trace is also available as an issue panel. |
+| Trace of one item | The chain up to its safety goal, the effective ASIL (with inheritance), verifying tests and their results, gaps with fixes, suggested links that you create with one click, and recording a test result. It refreshes when the issue is edited. |
+| Jira project page | The full audit: verification coverage overall and per ASIL, every gap with severity, fix and standard reference, the traceability matrix, suggested links, changes since the last baseline, and an audit report published to Confluence. |
+| Baselines | Save the audit at an assessment or a release. Every later audit shows coverage per ASIL before and now, gaps closed and opened, requirements newly verified or no longer verified, and the coverage trend across baselines. |
+| Project settings | Map the project's own issue types, link types and custom fields (ASIL, requirement ID, test method, test result) to the trace model, with a preview of the audit before saving. |
 | Confluence macro | A live matrix, gap list or ASIL coverage of a Jira project inside specs, safety cases and audit pages. |
-| Rovo agent "Traceability Auditor" | Answers questions such as "which ASIL D requirements are not verified?", explains gaps, proposes links and creates them after you confirm, and publishes the report. |
-| MCP server (`rovo:mcp`) | The same eight tools for external agents such as Claude Code or Cursor. |
+| Rovo agent "Traceability Auditor" | Answers questions such as "which ASIL D requirements are not verified?" or "what changed since the last assessment?", explains gaps, proposes links and creates them after you confirm, and publishes the report. |
+| MCP server (`rovo:mcp`) | The same nine tools for external agents such as Claude Code or Cursor. |
+
+![Changes since the last assessment](docs/changes.png)
+![Gaps closed and opened, coverage per ASIL](docs/changes-detail.png)
+![Project settings](docs/settings.png)
+![Traceability status on every issue](docs/issue-status.png)
 
 ## Rules
 
@@ -44,14 +54,25 @@ Every suggestion is a proposal: a person confirms it before it becomes a link.
 
 ## How the trace model is read from Jira
 
-- **Level, ASIL, allocation, test method and result**: the issue property `traceguard`, set from the issue panel;
-  otherwise labels (`tg-sg`, `tg-sys`, `tg-swr`, `tg-test`, `asil-d`, `alloc-hw`) or the issue type name
-  (Safety Goal, System Requirement, Software Requirement, Test).
-- **Links**: Jira issue links whose wording says derives or verifies (TraceGuard adds the link types *Derives* and
-  *Verifies*; Xray-style "tests / is tested by" works too), the Jira parent field, and links stored in the property for
-  references that are not Jira issues. Links are oriented by level, so a link created the wrong way round still reads correctly.
-- **Requirement IDs**: the property `ref` (for example `SWR-3` or a DOORS id) is shown instead of the Jira key.
+TraceGuard works on a project as it is. The **TraceGuard** page in the project settings maps the project's own
+issue types, link types and custom fields; without settings, the defaults below apply.
+
+- **Level**: the issue property `traceguard`, set from the TraceGuard panel; labels (`tg-sg`, `tg-sys`, `tg-swr`,
+  `tg-test`); the issue type set in the project settings; or an issue type named Safety Goal, System Requirement,
+  Software Requirement or Test.
+- **ASIL, requirement ID, test method and result**: the custom fields chosen in the settings when they have a value
+  (an ASIL such as `B(D)` records an ASIL decomposition); otherwise the property and the labels (`asil-d`, `alloc-hw`);
+  a test's workflow status named passed or failed counts as its result.
+- **Links**: the link types set in the settings, or Jira issue links whose wording says derives or verifies (TraceGuard
+  adds the link types *Derives* and *Verifies*; Xray-style "tests / is tested by" works too), the Jira parent field, and
+  links stored in the property for references that are not Jira issues. Links are oriented by level, so a link created
+  the wrong way round still reads correctly.
+- **Requirement IDs**: the property `ref` or the requirement ID field (for example `SWR-3` or a DOORS id) is shown
+  instead of the Jira key.
 - **Suspect links**: the last edit of summary or description, compared with the last run of each test.
+
+Settings and baselines are Jira project properties: every surface (Jira, Confluence, Rovo, MCP clients) reads the same
+data, whichever product a call comes through, and Jira lets only project administrators change them.
 
 ## Try it
 
@@ -63,7 +84,7 @@ electronic brake control unit (2 safety goals, 10 system and 16 software require
 
 | Path | What |
 |---|---|
-| `traceguard/core` | The analysis engine: plain JavaScript, no dependencies, 25 tests (`node --test test/`). |
+| `traceguard/core` | The analysis engine: plain JavaScript, no dependencies, 31 tests (`node --test test/`): rules, the Jira mapping with project settings, baselines and reports. |
 | `traceguard/demo` | The brake ECU demo project and a sample audit report. |
 | `app` | The Forge app: manifest, Jira and Confluence UI (UI Kit), resolvers, Rovo actions and agent, MCP server. |
 

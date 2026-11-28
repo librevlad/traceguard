@@ -1,7 +1,7 @@
 // Rovo actions. The same actions are the tools of the TraceGuard MCP server (rovo:mcp),
 // so Rovo agents and external agents such as Claude or Cursor get identical answers.
 import * as svc from '../backend/service.js';
-import { gapsView, matrixView, itemView, auditReport } from '../core/index.js';
+import { gapsView, matrixView, itemView, auditReport, changesLine } from '../core/index.js';
 
 const SEVERITIES = ['high', 'medium', 'low'];
 const LEVELS = ['SG', 'SYS', 'SWR', 'TEST'];
@@ -72,6 +72,29 @@ export const actionReport = run(async (p, ctx) => {
 });
 
 export const actionPublish = run(async (p, ctx) => svc.publishReport(ctx.projectKey, p.spaceKey));
+
+export const actionChanges = run(async (p, ctx) => {
+  const { loaded, changes } = await svc.withChanges(ctx.projectKey);
+  if (!changes) {
+    return {
+      project: loaded.project,
+      baseline: null,
+      note: 'No baseline is saved for this project yet. A project administrator saves one in the Changes tab of the TraceGuard audit page.',
+    };
+  }
+  const { newGaps, closedGaps, newlyVerified, noLongerVerified, removed, ...rest } = changes;
+  const keys = list => list.map(key => ({ key, url: svc.urlOf(loaded, key) }));
+  return {
+    project: loaded.project,
+    headline: changesLine(changes),
+    ...rest,
+    newGaps: withUrls(loaded, newGaps.slice(0, 100)),
+    closedGaps: withUrls(loaded, closedGaps.slice(0, 100)),
+    newlyVerified: keys(newlyVerified),
+    noLongerVerified: keys(noLongerVerified),
+    removed,
+  };
+});
 
 export const actionLink = run(async (p, ctx) => {
   const projectKey = ctx.projectKey || String(p.fromKey || '').split('-')[0];

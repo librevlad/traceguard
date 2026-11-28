@@ -1,12 +1,13 @@
 // What the UI, the Rovo actions and the MCP tools ask for. Inputs from agents are untrusted:
 // every key is validated before it reaches JQL or a REST path.
-import { analyze, auditReport, auditStorage, itemView } from '../core/index.js';
+import { analyze, auditReport, auditStorage, itemView, makeBaseline, compareBaseline } from '../core/index.js';
 import {
-  issuesToItems, demoIssues, labelUpdates, normalizeLevel, normalizeAsil,
-  PROPERTY_KEY, METHODS, RESULTS,
+  issuesToItems, demoIssues, labelUpdates, normalizeLevel, normalizeAsil, normalizeConfig, searchFields,
+  guessLevel, guessLinkType, PROPERTY_KEY, METHODS, RESULTS,
 } from '../core/jira.js';
 import { items as demoItems } from '../demo/brake-ecu.js';
 import * as rest from './jira.js';
+import * as store from './store.js';
 
 const PROJECT_RE = /^[A-Z][A-Z0-9_]{0,19}$/;
 const ISSUE_RE = /^[A-Z][A-Z0-9_]{0,19}-\d{1,9}$/;
@@ -33,19 +34,46 @@ async function inBatches(jobs, size) {
   for (let i = 0; i < jobs.length; i += size) await Promise.all(jobs.slice(i, i + size).map(job => job()));
 }
 
-export async function loadProject(projectKey) {
+// Reads a project with its TraceGuard settings (or the settings given, for a preview) and analyses it.
+export async function loadProject(projectKey, { config } = {}) {
   const key = projectKeyOf(projectKey);
-  const [project, issues, info] = await Promise.all([rest.getProject(key), rest.searchProject(key), rest.getServerInfo()]);
-  const { items, keyMap, unclassified } = issuesToItems(issues);
+  const [project, info, stored] = await Promise.all([
+    rest.getProject(key), rest.getServerInfo(), config ? null : store.getConfig(key),
+  ]);
+  const settings = normalizeConfig(config || stored);
+  const issues = await rest.searchProject(key, { fields: searchFields(settings) });
+  const { items, keyMap, unclassified } = issuesToItems(issues, settings);
   return {
     project: { key, name: project.name },
     baseUrl: info.baseUrl,
+    config: settings,
     items,
     keyMap,
     unclassified,
     issueCount: issues.length,
     result: analyze(items),
   };
+}
+
+// Settings and baselines are project properties: Jira lets only project administrators write them.
+// The permission is checked first for a clear message, and Jira checks it again on the write.
+async function asProjectAdmin(projectKey, what, fn) {
+  const denied = () => new UserError(`Only project administrators can ${what}.`);
+  if (!(await rest.canAdminister(projectKey))) throw denied();
+  try {
+    return await fn();
+  } catch (e) {
+    if (e.status === 401 || e.status === 403) throw denied();
+    throw e;
+  }
+}
+
+// The analysis, what changed since the last baseline (null when there is none) and the baseline history.
+// The project is read as the user first, so only people who can see it get its baselines.
+export async function withChanges(projectKey) {
+  const key = projectKeyOf(projectKey);
+  const [loaded, stored] = await Promise.all([loadProject(key), store.getBaselines(key)]);
+  return { loaded, changes: compareBaseline(stored?.latest, loaded.result), history: stored?.history || [] };
 }
 
 export const urlOf = (loaded, itemKey) => (loaded.keyMap[itemKey] ? `${loaded.baseUrl}/browse/${loaded.keyMap[itemKey]}` : null);
@@ -70,15 +98,74 @@ function demoStatus(loaded) {
 }
 
 export async function projectAudit(projectKey) {
-  const loaded = await loadProject(projectKey);
-  const { project, keyMap, unclassified, issueCount, baseUrl, result } = loaded;
+  const { loaded, changes, history } = await withChanges(projectKey);
+  const { project, keyMap, unclassified, issueCount, baseUrl, result, config } = loaded;
   return {
     project, keyMap, unclassified, issueCount, baseUrl,
+    configured: Object.keys(config.levels).length + Object.keys(config.links).length + Object.keys(config.fields).length > 0,
     demo: demoStatus(loaded),
     ...result,
-    report: auditReport(result, { project: `${project.name} (${project.key})`, date: today() }),
+    changes,
+    history,
+    report: auditReport(result, { project: `${project.name} (${project.key})`, date: today(), changes }),
     analysedAt: new Date().toISOString(),
   };
+}
+
+// A baseline is the audit as it stood at an assessment or release; later audits are compared with it.
+// Only figures, gap ids and item keys are kept: no personal data, not even who saved it.
+export async function saveBaseline(projectKey, { name } = {}) {
+  const key = projectKeyOf(projectKey);
+  const loaded = await loadProject(key);
+  const base = makeBaseline(loaded.result, { name: String(name || '').slice(0, 80) });
+  await asProjectAdmin(key, 'save a baseline', () => store.addBaseline(key, base));
+  return { at: base.at, name: base.name || '', truncated: Boolean(base.truncated) };
+}
+
+// Settings page: the project's issue types and the site's link types and custom fields, each with
+// the meaning TraceGuard gives it now (saved setting, otherwise its guess from the name or wording).
+export async function projectSettings(projectKey) {
+  const key = projectKeyOf(projectKey);
+  const [project, linkTypes, fields, canEdit, stored] = await Promise.all([
+    rest.getProject(key), rest.listLinkTypes(), rest.listFields(), rest.canAdminister(key), store.getConfig(key),
+  ]);
+  const config = normalizeConfig(stored);
+  return {
+    project: { key, name: project.name },
+    canEdit,
+    savedAt: stored?.savedAt || null,
+    issueTypes: (project.issueTypes || []).map(t => ({
+      id: t.id, name: t.name, subtask: Boolean(t.subtask), level: config.levels[t.id] || guessLevel(t.name) || 'none',
+    })),
+    linkTypes: linkTypes.map(t => ({
+      name: t.name, outward: t.outward, inward: t.inward, meaning: config.links[t.name] || guessLinkType(t) || 'none',
+    })),
+    fields,
+    selected: config.fields,
+  };
+}
+
+// What the audit would read with these settings, before they are saved.
+export async function previewSettings(projectKey, raw) {
+  const loaded = await loadProject(projectKey, { config: normalizeConfig(raw) });
+  const levels = { SG: 0, SYS: 0, SWR: 0, TEST: 0 };
+  for (const i of loaded.items) levels[i.level] += 1;
+  return {
+    issueCount: loaded.issueCount,
+    unclassified: loaded.unclassified,
+    levels,
+    links: loaded.items.reduce((n, i) => n + i.links.length, 0),
+    coverage: loaded.result.coverage.percent,
+    gaps: loaded.result.summary.gaps,
+  };
+}
+
+export async function saveSettings(projectKey, raw) {
+  const key = projectKeyOf(projectKey);
+  const config = normalizeConfig(raw);
+  await asProjectAdmin(key, 'change the TraceGuard settings',
+    () => store.setConfig(key, { ...config, savedAt: new Date().toISOString() }));
+  return config;
 }
 
 export async function issueTrace(projectKey, issueKey) {
@@ -242,13 +329,52 @@ export async function seedDemo(projectKey, state = {}) {
 export async function publishReport(projectKey, spaceKey) {
   const space = String(spaceKey || '').trim();
   if (!SPACE_RE.test(space)) throw new UserError('Name the Confluence space by its key, for example ENG.');
-  const loaded = await loadProject(projectKey);
+  const { loaded, changes } = await withChanges(projectKey);
   const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
   const name = `${loaded.project.name} (${loaded.project.key})`;
-  const storage = auditStorage(loaded.result, { project: name, date: `${stamp} UTC`, link: k => urlOf(loaded, k) });
+  const storage = auditStorage(loaded.result, { project: name, date: `${stamp} UTC`, link: k => urlOf(loaded, k), changes });
   const page = await rest.createConfluencePage(space, `Traceability audit — ${name} — ${stamp} UTC`, storage);
   const url = page.url && !page.url.startsWith('http') ? `${loaded.baseUrl}/wiki${page.url}` : page.url;
   return { ...page, url, space, summary: loaded.result.summary };
+}
+
+// Status on the TraceGuard button of the issue view (jira:issueContext dynamic properties).
+// Jira asks for it when the panel is collapsed; an issue outside the trace model answers quickly.
+const lozenge = (label, type = 'default') => ({ status: { type: 'lozenge', value: { label, type } } });
+
+async function issueStatus(projectKey, issueKey) {
+  const key = projectKeyOf(projectKey);
+  const [stored, issue] = await Promise.all([store.getConfig(key), rest.getIssue(issueKeyOf(issueKey))]);
+  const settings = normalizeConfig(stored);
+  if (!issuesToItems([issue], settings).items.length) return lozenge('not traced');
+  const trace = await issueTrace(key, issueKey);
+  if (!trace.classified) return lozenge('not traced');
+  const { item, gaps, verification } = trace.view;
+  if (gaps.length) {
+    return lozenge(`${gaps.length} gap${gaps.length === 1 ? '' : 's'}`, gaps.some(g => g.severity === 'high') ? 'removed' : 'moved');
+  }
+  if (item.level === 'TEST') {
+    if (item.result === 'pass') return lozenge('passed', 'success');
+    return item.result === 'fail' ? lozenge('failed', 'removed') : lozenge('not run');
+  }
+  if (verification?.scope === 'software') return verification.verified ? lozenge('verified', 'success') : lozenge('open', 'moved');
+  return lozenge('traced', 'success');
+}
+
+export async function contextStatus(payload) {
+  const ext = payload?.extension || {};
+  const [projectKey, issueKey] = [ext.project?.key, ext.issue?.key];
+  if (!projectKey || !issueKey) return lozenge('TraceGuard');
+  try {
+    return await issueStatus(projectKey, issueKey);
+  } catch {
+    try {
+      return await rest.asApp(() => issueStatus(projectKey, issueKey));
+    } catch (e) {
+      console.error('context status failed', e);
+      return lozenge('TraceGuard');
+    }
+  }
 }
 
 // Project and issue the user is looking at when a Rovo agent calls an action.

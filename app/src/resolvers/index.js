@@ -24,4 +24,11 @@ define('createLink', req => svc.createTraceLink(projectOf(req), req.payload));
 define('seedDemo', req => svc.seedDemo(req.context?.extension?.project?.key, req.payload || {}));
 define('publishReport', req => svc.publishReport(projectOf(req), req.payload?.spaceKey));
 
+// Settings and baselines change the project itself, so they only act on the project in the Forge context.
+const contextProject = req => req.context?.extension?.project?.key;
+define('getSettings', req => svc.projectSettings(contextProject(req)));
+define('previewSettings', req => svc.previewSettings(contextProject(req), req.payload?.config));
+define('saveSettings', req => svc.saveSettings(contextProject(req), req.payload?.config));
+define('saveBaseline', req => svc.saveBaseline(contextProject(req), { name: req.payload?.name }));
+
 export const handler = resolver.getDefinitions();

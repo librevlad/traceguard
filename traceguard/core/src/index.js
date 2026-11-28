@@ -6,7 +6,8 @@ import { suggestLinks } from './suggest.js';
 
 export { auditReport } from './report.js';
 export { auditStorage } from './storage.js';
-export { RULES } from './rules.js';
+export { RULES, gapId } from './rules.js';
+export { makeBaseline, compareBaseline, changesLine } from './baseline.js';
 export { itemView, gapsView, matrixView } from './views.js';
 
 export function analyze(items, options = {}) {

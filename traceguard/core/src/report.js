@@ -1,8 +1,9 @@
-// Audit-ready report in Markdown (converted to Confluence storage format by the app).
+// Audit-ready report in Markdown, for agents and the audit page.
+import { changesLine } from './baseline.js';
 
 const SEVERITY_LABEL = { high: 'High', medium: 'Medium', low: 'Low' };
 
-export function auditReport(result, { project = 'Project', date = new Date().toISOString().slice(0, 10) } = {}) {
+export function auditReport(result, { project = 'Project', date = new Date().toISOString().slice(0, 10), changes = null } = {}) {
   const { coverage, gaps, suggestions, summary } = result;
   const lines = [];
   lines.push(`# Traceability audit — ${project}`, '');
@@ -15,6 +16,14 @@ export function auditReport(result, { project = 'Project', date = new Date().toI
     lines.push(`| ${g.asil === 'none' ? 'not set' : g.asil} | ${g.total} | ${g.verified} | ${g.percent}% |`);
   }
   lines.push('');
+
+  if (changes) {
+    lines.push('## Changes since the baseline', '');
+    lines.push(`Baseline${changes.name ? ` "${changes.name}"` : ''} of ${String(changes.since).slice(0, 10)}: ${changesLine(changes)}.`, '');
+    if (changes.closedGaps.length) lines.push(`Closed: ${changes.closedGaps.map(g => `${g.key} (${g.rule})`).join(', ')}.`, '');
+    if (changes.newGaps.length) lines.push(`New: ${changes.newGaps.map(g => `${g.key} — ${g.title}`).join('; ')}.`, '');
+    if (changes.noLongerVerified.length) lines.push(`No longer verified: ${changes.noLongerVerified.join(', ')}.`, '');
+  }
 
   lines.push('## Gaps', '');
   lines.push(`High: **${summary.gaps.high}**, medium: **${summary.gaps.medium}**, low: **${summary.gaps.low}**.`, '');

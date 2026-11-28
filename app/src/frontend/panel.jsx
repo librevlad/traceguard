@@ -4,6 +4,7 @@ import ForgeReconciler, {
   Box, Button, ButtonGroup, Heading, Inline, Label, LoadingButton, SectionMessage, Select, Stack, Strong, Text,
   Textfield, useProductContext,
 } from '@forge/react';
+import { events } from '@forge/bridge';
 import {
   Asil, call, Failure, GapMessage, ItemLink, Level, LEVEL_NAME, Loading, METHOD_NAME, Result, TraceStatus,
 } from './common.jsx';
@@ -248,6 +249,11 @@ const App = () => {
     }
   };
   useEffect(() => { if (issueKey) load(); }, [issueKey]);
+  // Re-read the trace when the issue is edited, so a changed requirement shows its suspect tests at once.
+  useEffect(() => {
+    const subscription = events.on('JIRA_ISSUE_CHANGED', () => load());
+    return () => { subscription.then(s => s.unsubscribe()).catch(() => {}); };
+  }, []);
 
   if (error) return <Failure error={error} onRetry={load} />;
   if (!data) return <Loading label="Reading the trace…" />;

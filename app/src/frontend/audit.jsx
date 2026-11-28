@@ -1,9 +1,9 @@
 // Jira project page: the full traceability audit of the project.
 import React, { useEffect, useState } from 'react';
 import ForgeReconciler, {
-  BarChart, Box, Button, CodeBlock, DynamicTable, EmptyState, Heading, Inline, Label, Link, LoadingButton, Modal,
-  ModalBody, ModalFooter, ModalHeader, ModalTitle, ModalTransition, ProgressBar, SectionMessage, SectionMessageAction, Select, Stack,
-  StackBarChart, Strong, Tab, TabList, TabPanel, Tabs, Text, Textfield, useProductContext,
+  BarChart, Box, Button, CodeBlock, DynamicTable, EmptyState, Heading, Inline, Label, LineChart, Link, LoadingButton, Modal,
+  Lozenge, ModalBody, ModalFooter, ModalHeader, ModalTitle, ModalTransition, ProgressBar, SectionMessage, SectionMessageAction, Select,
+  Stack, StackBarChart, Strong, Tab, TabList, TabPanel, Tabs, Text, Textfield, useProductContext,
 } from '@forge/react';
 import {
   Asil, call, Failure, ItemLink, KeyList, Level, Loading, Result, Severity, SEVERITY_ORDER, Tile, TraceStatus, METHOD_NAME,
@@ -22,20 +22,42 @@ const RULE_LABEL = {
   'asil-downgrade': 'ASIL downgrade', 'missing-asil': 'No ASIL', 'orphan-test': 'Orphan test', 'broken-link': 'Broken link',
 };
 
+const signed = n => (n > 0 ? `+${n}` : n < 0 ? `−${-n}` : '±0');
+
+// A change against the baseline; for gaps fewer is better, for coverage more is better.
+function Delta({ value, suffix = '', fewerIsBetter = false }) {
+  if (value === null || value === undefined) return null;
+  const good = fewerIsBetter ? value < 0 : value > 0;
+  const bad = fewerIsBetter ? value > 0 : value < 0;
+  return <Lozenge appearance={good ? 'success' : bad ? 'removed' : 'default'}>{`${signed(value)}${suffix}`}</Lozenge>;
+}
+
+const sinceText = changes => `since ${changes.name || 'baseline'} (${new Date(changes.since).toLocaleDateString()})`;
+
 function Summary({ data }) {
-  const { summary, coverage } = data;
+  const { summary, coverage, changes } = data;
+  // Only a real change is shown on the gap tiles; the coverage tile always says what it is compared with.
+  const gapDelta = s => (changes?.counts?.before ? summary.gaps[s] - (changes.counts.before[s] ?? 0) || null : null);
   return (
     <Inline space="space.150" shouldWrap>
       <Tile label="Verification coverage" value={`${coverage.percent ?? 0}%`}>
         <ProgressBar value={(coverage.percent ?? 0) / 100} appearance={coverage.percent === 100 ? 'success' : 'default'}
           ariaLabel="Verification coverage" />
         <Text size="small">{coverage.verified} of {coverage.total} verified</Text>
+        {changes && (
+          <Inline space="space.050" alignBlock="center">
+            <Delta value={changes.coverage.delta} suffix=" pts" />
+            <Text size="small" color="color.text.subtle">{sinceText(changes)}</Text>
+          </Inline>
+        )}
       </Tile>
       <Tile label="Requirements" value={summary.requirements} />
       <Tile label="Test cases" value={summary.tests} />
-      <Tile label="High gaps" value={summary.gaps.high}><Severity value="high" /></Tile>
-      <Tile label="Medium gaps" value={summary.gaps.medium}><Severity value="medium" /></Tile>
-      <Tile label="Low gaps" value={summary.gaps.low}><Severity value="low" /></Tile>
+      {['high', 'medium', 'low'].map(s => (
+        <Tile key={s} label={`${s[0].toUpperCase()}${s.slice(1)} gaps`} value={summary.gaps[s]}>
+          <Inline space="space.050" alignBlock="center"><Severity value={s} /><Delta value={gapDelta(s)} fewerIsBetter /></Inline>
+        </Tile>
+      ))}
     </Inline>
   );
 }
@@ -214,6 +236,160 @@ function SuggestionsTab({ data, onChanged }) {
   );
 }
 
+// Baseline: the audit as it stood at an assessment or release, and what changed since.
+// The modal is separate from its button: UI Kit renders only its own components in props such as
+// EmptyState primaryAction, so the button there must be a plain Button.
+function BaselineModal({ open, replaces, onClose, onSaved }) {
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await call('saveBaseline', { name: name.trim() });
+      onClose();
+      onSaved();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <ModalTransition>
+      {open && (
+        <Modal onClose={() => !busy && onClose()}>
+          <ModalHeader><ModalTitle>Save this audit as the baseline?</ModalTitle></ModalHeader>
+          <ModalBody>
+            <Stack space="space.150">
+              <Text>
+                Later audits show what changed since now: coverage per ASIL, gaps closed and opened, requirements that became verified or
+                lost their verification.{replaces ? ' The new baseline replaces the current one.' : ''}
+              </Text>
+              <Stack space="space.050">
+                <Label labelFor="baseline-name">Name (optional)</Label>
+                <Textfield id="baseline-name" name="baselineName" placeholder="ASPICE assessment, December" onChange={e => setName(e.target.value)} />
+              </Stack>
+              {error && <SectionMessage appearance="error"><Text>{error}</Text></SectionMessage>}
+            </Stack>
+          </ModalBody>
+          <ModalFooter>
+            <Button appearance="subtle" isDisabled={busy} onClick={onClose}>Cancel</Button>
+            <LoadingButton appearance="primary" isLoading={busy} onClick={save}>Save baseline</LoadingButton>
+          </ModalFooter>
+        </Modal>
+      )}
+    </ModalTransition>
+  );
+}
+
+function ChangesTab({ data, onChanged }) {
+  const c = data.changes;
+  const [open, setOpen] = useState(false);
+  const modal = <BaselineModal open={open} replaces={Boolean(c)} onClose={() => setOpen(false)} onSaved={onChanged} />;
+  const props = { keyMap: data.keyMap, baseUrl: data.baseUrl };
+  const link = k => <ItemLink itemKey={k} {...props} />;
+  const name = a => (a === 'none' ? 'not set' : a === 'QM' ? 'QM' : `ASIL ${a}`);
+  if (!c) {
+    return (
+      <>
+        <EmptyState
+          header="No baseline yet"
+          description={'Save the audit as it stands at an assessment, a release or a sprint review. From then on TraceGuard shows '
+            + 'what changed: coverage per ASIL, gaps closed and opened, and requirements that lost their verification.'}
+          primaryAction={<Button appearance="primary" onClick={() => setOpen(true)}>Save baseline</Button>}
+        />
+        {modal}
+      </>
+    );
+  }
+  const verificationRows = [
+    ...c.newlyVerified.map(k => ({ k, change: <Lozenge appearance="success">newly verified</Lozenge> })),
+    ...c.noLongerVerified.map(k => ({ k, change: <Lozenge appearance="removed">no longer verified</Lozenge> })),
+  ];
+  return (
+    <Stack space="space.300">
+      <Inline spread="space-between" alignBlock="center" shouldWrap>
+        <Heading size="medium">Since {c.name || 'the baseline'} of {new Date(c.since).toLocaleString()}</Heading>
+        <Button onClick={() => setOpen(true)}>Save a new baseline</Button>
+      </Inline>
+      {modal}
+      <Inline space="space.150" shouldWrap>
+        <Tile label="Verification coverage" value={`${c.coverage.before ?? '—'}% → ${c.coverage.now ?? '—'}%`}>
+          <Delta value={c.coverage.delta} suffix=" points" />
+        </Tile>
+        <Tile label="Gaps closed" value={c.closedGaps.length} />
+        <Tile label="New gaps" value={c.newGaps.length} />
+        <Tile label="Newly verified" value={c.newlyVerified.length} />
+        <Tile label="No longer verified" value={c.noLongerVerified.length} />
+      </Inline>
+      {data.history.length > 1 && (
+        <LineChart
+          data={[...data.history.map(h => ({ when: `${new Date(h.at).toLocaleDateString()}${h.name ? ` ${h.name}` : ''}`, coverage: h.coverage ?? 0 })),
+            { when: 'now', coverage: data.coverage.percent ?? 0 }]}
+          xAccessor="when" yAccessor="coverage" title="Verification coverage at each baseline (%)" height={260}
+        />
+      )}
+      {c.truncated && (
+        <SectionMessage appearance="information">
+          <Text>The baseline was too large to keep every gap, so some low-severity gaps may show as new.</Text>
+        </SectionMessage>
+      )}
+      <DynamicTable
+        caption="Coverage by ASIL"
+        head={{ cells: [
+          { key: 'asil', content: 'ASIL' }, { key: 'before', content: 'Baseline' }, { key: 'now', content: 'Now' }, { key: 'delta', content: 'Change' },
+        ] }}
+        rows={c.byAsil.map(r => ({
+          key: r.asil,
+          cells: [
+            { key: r.asil, content: name(r.asil) },
+            { key: `b-${r.asil}`, content: r.before === null ? '—' : `${r.before}% (${r.verifiedBefore} of ${r.totalBefore})` },
+            { key: `n-${r.asil}`, content: r.now === null ? '—' : `${r.now}% (${r.verifiedNow} of ${r.totalNow})` },
+            { key: `d-${r.asil}`, content: <Delta value={r.before === null || r.now === null ? null : r.now - r.before} suffix=" points" /> },
+          ],
+        }))}
+      />
+      <DynamicTable
+        caption={`New gaps (${c.newGaps.length})`}
+        head={{ cells: [{ key: 's', content: 'Severity' }, { key: 'i', content: 'Item' }, { key: 'g', content: 'Gap' }, { key: 'd', content: 'Detail' }] }}
+        rows={c.newGaps.map((g, n) => ({
+          key: `new-${n}`,
+          cells: [
+            { key: `s-${n}`, content: <Severity value={g.severity} /> },
+            { key: `i-${n}`, content: link(g.key) },
+            { key: `g-${n}`, content: g.title },
+            { key: `d-${n}`, content: g.detail },
+          ],
+        }))}
+        rowsPerPage={10}
+        emptyView={<Text>No new gaps since the baseline.</Text>}
+      />
+      <DynamicTable
+        caption={`Closed gaps (${c.closedGaps.length})`}
+        head={{ cells: [{ key: 's', content: 'Was' }, { key: 'i', content: 'Item' }, { key: 'g', content: 'Gap' }] }}
+        rows={c.closedGaps.map((g, n) => ({
+          key: `closed-${n}`,
+          cells: [
+            { key: `s-${n}`, content: <Severity value={g.severity} /> },
+            { key: `i-${n}`, content: link(g.key) },
+            { key: `g-${n}`, content: `${RULE_LABEL[g.rule] || g.rule}${g.about && g.about.includes(':') ? ` (${g.about.split(':')[0]})` : ''}` },
+          ],
+        }))}
+        rowsPerPage={10}
+        emptyView={<Text>No gaps closed since the baseline yet.</Text>}
+      />
+      <DynamicTable
+        caption="Verification status changes"
+        head={{ cells: [{ key: 'i', content: 'Requirement' }, { key: 'c', content: 'Change' }] }}
+        rows={verificationRows.map(r => ({ key: r.k, cells: [{ key: `i-${r.k}`, content: link(r.k) }, { key: `c-${r.k}`, content: r.change }] }))}
+        emptyView={<Text>No requirement changed its verification status.</Text>}
+      />
+    </Stack>
+  );
+}
+
 function ReportTab({ data }) {
   const [space, setSpace] = useState('');
   const [busy, setBusy] = useState(false);
@@ -301,8 +477,8 @@ function DemoLoader({ projectKey, onDone }) {
       <EmptyState
         header="No requirements or test cases here yet"
         description={'TraceGuard reads safety goals, system and software requirements and test cases from Jira. '
-          + 'Classify issues from the TraceGuard panel on an issue, label them (tg-swr, tg-test, asil-d), '
-          + 'or load a demo project to see an audit right away.'}
+          + 'Map your own issue types, link types and fields in Project settings > TraceGuard, classify issues from the '
+          + 'TraceGuard panel on an issue, label them (tg-swr, tg-test, asil-d), or load a demo project to see an audit right away.'}
         primaryAction={<Button appearance="primary" onClick={() => setOpen(true)}>Load the brake ECU demo</Button>}
       />
       <ModalTransition>
@@ -376,7 +552,7 @@ const App = () => {
             <Heading size="large">Traceability audit — {data.project.name}</Heading>
             <Text size="small" color="color.text.subtle">
               ASPICE SYS.2 · SWE.1 · SWE.6 and ISO 26262 · {data.issueCount} issues read, {data.unclassified} not classified ·
-              analysed {new Date(data.analysedAt).toLocaleString()}
+              {data.configured ? ' project settings applied' : ' default settings'} · analysed {new Date(data.analysedAt).toLocaleString()}
             </Text>
           </Stack>
           <LoadingButton isLoading={loading} onClick={load}>Run audit again</LoadingButton>
@@ -391,12 +567,14 @@ const App = () => {
                 <Tab>Matrix</Tab>
                 <Tab>ASIL coverage</Tab>
                 <Tab>Suggested links ({data.suggestions.length})</Tab>
+                <Tab>{data.changes ? `Changes (${data.changes.closedGaps.length} closed, ${data.changes.newGaps.length} new)` : 'Changes'}</Tab>
                 <Tab>Audit report</Tab>
               </TabList>
               <TabPanel><Box paddingBlock="space.200"><GapsTab data={data} /></Box></TabPanel>
               <TabPanel><Box paddingBlock="space.200"><MatrixTab data={data} /></Box></TabPanel>
               <TabPanel><Box paddingBlock="space.200"><CoverageTab data={data} /></Box></TabPanel>
               <TabPanel><Box paddingBlock="space.200"><SuggestionsTab data={data} onChanged={load} /></Box></TabPanel>
+              <TabPanel><Box paddingBlock="space.200"><ChangesTab data={data} onChanged={load} /></Box></TabPanel>
               <TabPanel><Box paddingBlock="space.200"><ReportTab data={data} /></Box></TabPanel>
             </Tabs>
           </>

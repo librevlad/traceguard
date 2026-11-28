@@ -1,5 +1,7 @@
 // Gap rules: each rule looks at one item and returns zero or more gaps.
-// A gap: { rule, severity: 'high'|'medium'|'low', key, title, detail, fix, ref }
+// A gap: { rule, severity: 'high'|'medium'|'low', key, title, detail, fix, ref, about? }
+// about tells apart gaps of one rule on one item (the test, the parent or the missing target),
+// so gapId() stays stable from one audit to the next.
 import { isRequirement, asilRank, ancestors, effectiveAsil } from './model.js';
 import { verificationStatus, needsDeepVerification, ROBUST_METHODS } from './verify.js';
 
@@ -11,7 +13,11 @@ function byAsil(asil, floor = 'low') {
   return floor;
 }
 
-const gap = (rule, severity, key, title, detail, fix, ref) => ({ rule, severity, key, title, detail, fix, ref });
+const gap = (rule, severity, key, title, detail, fix, ref, about) => ({
+  rule, severity, key, title, detail, fix, ref, ...(about ? { about } : {}),
+});
+
+export const gapId = g => [g.rule, g.key, g.about].filter(Boolean).join('|');
 
 export const RULES = [
   {
@@ -61,12 +67,12 @@ export const RULES = [
       if (s.tests.length < 2) {
         out.push(gap(this.id, 'high', item.key, 'Too few tests for its ASIL',
           `${item.key} is ASIL ${s.asil} but has ${s.tests.length} test case; expected at least 2.`,
-          'Add an independent test case for this requirement.', 'ISO 26262-6 §9.4'));
+          'Add an independent test case for this requirement.', 'ISO 26262-6 §9.4', 'count'));
       }
       if (!s.tests.some(t => ROBUST_METHODS.includes(t.method))) {
         out.push(gap(this.id, 'high', item.key, 'No fault-injection or back-to-back test',
           `${item.key} is ASIL ${s.asil}; none of its tests use fault injection or back-to-back testing.`,
-          'Add a fault-injection or back-to-back test.', 'ISO 26262-6 Table 7'));
+          'Add a fault-injection or back-to-back test.', 'ISO 26262-6 Table 7', 'method'));
       }
       return out;
     },
@@ -78,11 +84,11 @@ export const RULES = [
       const s = verificationStatus(index, item);
       const out = s.failing.map(t => gap(this.id, byAsil(s.asil, 'medium'), item.key, 'Failing test',
         `${t.key} verifying ${item.key} failed in its last run.`,
-        `Fix the defect or the test, then re-run ${t.key}.`, 'ASPICE SWE.6 BP3'));
+        `Fix the defect or the test, then re-run ${t.key}.`, 'ASPICE SWE.6 BP3', `${t.key}:fail`));
       for (const t of s.notRun) {
         out.push(gap(this.id, byAsil(s.asil, 'low'), item.key, 'Test never executed',
           `${t.key} verifying ${item.key} has no result yet.`,
-          `Run ${t.key} and record the result.`, 'ASPICE SWE.6 BP3'));
+          `Run ${t.key} and record the result.`, 'ASPICE SWE.6 BP3', `${t.key}:none`));
       }
       return out;
     },
@@ -110,7 +116,7 @@ export const RULES = [
         if (parent?.asil && item.asil && asilRank(item.asil) < asilRank(parent.asil)) {
           out.push(gap(this.id, 'high', item.key, 'ASIL lower than its parent',
             `${item.key} is ASIL ${item.asil} but derives from ${p} (ASIL ${parent.asil}) without an ASIL decomposition.`,
-            `Raise ${item.key} to ASIL ${parent.asil}, or document an ASIL decomposition.`, 'ISO 26262-9 §5'));
+            `Raise ${item.key} to ASIL ${parent.asil}, or document an ASIL decomposition.`, 'ISO 26262-9 §5', p));
         }
       }
       return out;
@@ -151,7 +157,7 @@ export function findGaps(items, index) {
   for (const b of index.broken) {
     gaps.push(gap('broken-link', 'medium', b.from, 'Broken link',
       `${b.from} ${b.type} ${b.target}, but ${b.target} does not exist.`,
-      `Fix or remove the link to ${b.target}.`, 'ASPICE SUP.10'));
+      `Fix or remove the link to ${b.target}.`, 'ASPICE SUP.10', b.target));
   }
   return gaps.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]
     || a.key.localeCompare(b.key, 'en', { numeric: true }) || a.rule.localeCompare(b.rule));

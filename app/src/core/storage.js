@@ -1,5 +1,7 @@
 // Audit report in Confluence storage format (XHTML), for the page TraceGuard publishes.
 // link(key) returns the Jira URL of an item key, or null to print the key as text.
+// changes (optional) is compareBaseline() output: the report then shows the progress since the baseline.
+import { changesLine } from './baseline.js';
 
 const esc = s => String(s ?? '')
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -18,7 +20,9 @@ function table(head, rows) {
   return `<table data-layout="full-width"><tbody><tr>${th}</tr>${tr}</tbody></table>`;
 }
 
-export function auditStorage(result, { project = 'Project', date = new Date().toISOString().slice(0, 10), link = () => null } = {}) {
+export function auditStorage(result, {
+  project = 'Project', date = new Date().toISOString().slice(0, 10), link = () => null, changes = null,
+} = {}) {
   const { coverage, gaps, matrix, suggestions, summary } = result;
   const k = key => {
     const href = link(key);
@@ -37,6 +41,19 @@ export function auditStorage(result, { project = 'Project', date = new Date().to
   out.push(table(['ASIL', 'Requirements', 'Verified', 'Coverage'], coverage.byAsil.map(g => [
     esc(g.asil === 'none' ? 'not set' : g.asil), g.total, g.verified, `${g.percent}%`,
   ])));
+
+  if (changes) {
+    out.push('<h2>Changes since the baseline</h2>');
+    out.push(`<p>Baseline${changes.name ? ` <strong>${esc(changes.name)}</strong>` : ''} of ${esc(String(changes.since).slice(0, 10))}: `
+      + `${esc(changesLine(changes))}.</p>`);
+    const rows = [
+      ...changes.closedGaps.map(g => [status('CLOSED', 'Green'), k(g.key), esc(g.rule)]),
+      ...changes.newGaps.map(g => [status('NEW', 'Red'), k(g.key), esc(g.title)]),
+      ...changes.noLongerVerified.map(key => [status('NO LONGER VERIFIED', 'Red'), k(key), 'verification lost']),
+      ...changes.newlyVerified.map(key => [status('VERIFIED', 'Green'), k(key), 'newly verified']),
+    ];
+    if (rows.length) out.push(table(['Change', 'Item', 'What'], rows));
+  }
 
   out.push('<h2>Gaps</h2>');
   out.push(`<p>${status(`${summary.gaps.high} high`, 'Red')} ${status(`${summary.gaps.medium} medium`, 'Yellow')} `

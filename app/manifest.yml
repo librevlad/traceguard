@@ -7,6 +7,16 @@ modules:
       render: native
       title: TraceGuard
       icon: https://developer.atlassian.com/platform/forge/images/icons/issue-panel-icon.svg
+  jira:issueContext:
+    - key: traceguard-context
+      resource: panel
+      resolver:
+        function: resolver
+      render: native
+      title: TraceGuard
+      label: Traceability
+      dynamicProperties:
+        function: context-status
   jira:projectPage:
     - key: traceguard-audit
       resource: audit
@@ -14,6 +24,13 @@ modules:
         function: resolver
       render: native
       title: TraceGuard audit
+  jira:projectSettingsPage:
+    - key: traceguard-settings
+      resource: settings
+      resolver:
+        function: resolver
+      render: native
+      title: TraceGuard
   macro:
     - key: traceguard-matrix
       resource: macro
@@ -47,7 +64,8 @@ modules:
         2. Get every fact from the TraceGuard actions. Never invent issue keys, test results, ASILs or
            coverage numbers. Use the url fields to link items.
         3. For an overview call get-coverage-by-asil and get-trace-gaps. For one requirement or test
-           call get-item-trace. For the full table call get-trace-matrix.
+           call get-item-trace. For the full table call get-trace-matrix. For progress since the last
+           assessment or release call get-changes-since-baseline.
         4. Present gaps highest severity first. For each gap give the item, what is missing, the fix
            and the standard reference. Group many gaps by rule and keep the answer short.
         5. Link suggestions come from text similarity. Show them as proposals. Call create-trace-link
@@ -58,6 +76,7 @@ modules:
         - Audit the traceability of this project
         - Which ASIL C and D requirements are not verified?
         - Suggest links for tests that verify nothing
+        - What changed since the last baseline?
         - Publish the audit report to Confluence
       actions:
         - get-trace-gaps
@@ -66,6 +85,7 @@ modules:
         - get-item-trace
         - get-link-suggestions
         - get-audit-report
+        - get-changes-since-baseline
         - create-trace-link
         - publish-audit-report
   rovo:mcp:
@@ -78,6 +98,7 @@ modules:
         - get-item-trace
         - get-link-suggestions
         - get-audit-report
+        - get-changes-since-baseline
         - create-trace-link
         - publish-audit-report
   action:
@@ -188,6 +209,20 @@ modules:
           type: string
           required: false
           description: Key of the Jira project, for example BRK. Defaults to the project the user is viewing.
+    - key: get-changes-since-baseline
+      name: Get changes since the baseline
+      function: action-changes
+      actionVerb: GET
+      description: |
+        Compares the traceability audit of a Jira project with its saved baseline, such as the last
+        assessment: coverage per ASIL before and now, gaps closed and opened, requirements newly verified
+        or no longer verified.
+      inputs:
+        projectKey:
+          title: Project key
+          type: string
+          required: false
+          description: Key of the Jira project, for example BRK. Defaults to the project the user is viewing.
     - key: create-trace-link
       name: Create trace link
       function: action-link
@@ -254,6 +289,10 @@ modules:
       handler: index.actionLink
     - key: action-publish
       handler: index.actionPublish
+    - key: action-changes
+      handler: index.actionChanges
+    - key: context-status
+      handler: index.contextStatus
 resources:
   - key: panel
     path: src/frontend/panel.jsx
@@ -261,11 +300,14 @@ resources:
     path: src/frontend/audit.jsx
   - key: macro
     path: src/frontend/macro.jsx
+  - key: settings
+    path: src/frontend/settings.jsx
 permissions:
   scopes:
     - read:jira-work
     - write:jira-work
     - manage:jira-configuration
+    - manage:jira-project
     - read:space:confluence
     - write:page:confluence
 app:

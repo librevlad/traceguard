@@ -6,6 +6,9 @@
 //                                                the Jira parent field, and links kept in the property
 //   human requirement ID (SWR-3, DOORS id)       property "ref"; it becomes the item key when unique
 //   content change time (suspect links)          property "changedAt" or the last summary/description edit
+//   project settings (TraceGuard settings page)  which issue types are which level, which link types
+//                                                derive or verify, and custom fields for ASIL, requirement
+//                                                ID, test method and test result
 //
 // Links are oriented by level, so a link created "the wrong way round" still reads correctly:
 // a test always verifies a requirement, and a lower-level requirement derives from a higher one.
@@ -18,6 +21,9 @@ export const RESULTS = ['pass', 'fail', 'none'];
 export const ALLOCATIONS = ['sw', 'hw'];
 export const SEARCH_FIELDS = ['summary', 'description', 'issuetype', 'labels', 'status', 'issuelinks', 'parent',
   'created', 'updated', 'statuscategorychangedate'];
+export const FIELD_ROLES = ['asil', 'ref', 'method', 'result'];
+export const LINK_MEANINGS = ['derives', 'verifies', 'none'];
+const FIELD_ID_RE = /^customfield_\d{1,9}$/;
 
 // Link types TraceGuard creates on setup. Existing types with the same wording work too.
 export const LINK_TYPES = {
@@ -71,6 +77,71 @@ export function normalizeAsil(v) {
   return ASILS.includes(s) ? s : null;
 }
 
+// "ASIL B(D)": ASIL B that comes from decomposing an ASIL D requirement (ISO 26262-9).
+export function parseAsil(v) {
+  const s = String(v || '').trim().toUpperCase().replace(/^ASIL[\s_-]*/, '');
+  const m = /^(QM|[ABCD])\s*\(\s*([ABCD])\s*\)$/.exec(s);
+  if (m) return { asil: m[1], decomposition: `${m[1]}(${m[2]})` };
+  const asil = normalizeAsil(s);
+  return asil ? { asil } : null;
+}
+
+// Level TraceGuard assumes for an issue type name when the project has no setting for it.
+export function guessLevel(issueTypeName) {
+  for (const [re, level] of TYPE_PATTERNS) if (re.test(String(issueTypeName || ''))) return level;
+  return null;
+}
+
+// Meaning TraceGuard assumes for a Jira link type from its wording: derives, verifies or null.
+export function guessLinkType(linkType) {
+  return linkSemantics(linkType?.outward)?.type || linkSemantics(linkType?.inward)?.type || null;
+}
+
+// Project settings as saved from the settings page; anything unexpected is dropped.
+//   levels: { <issue type id>: 'SG' | 'SYS' | 'SWR' | 'TEST' | 'none' }
+//   links:  { <link type name>: 'derives' | 'verifies' | 'none' }
+//   fields: { asil | ref | method | result: 'customfield_10042' }
+export function normalizeConfig(raw) {
+  const out = { levels: {}, links: {}, fields: {} };
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [id, v] of Object.entries(raw.levels || {}).slice(0, 300)) {
+    const level = v === 'none' ? 'none' : normalizeLevel(v);
+    if (/^\d{1,18}$/.test(id) && level) out.levels[id] = level;
+  }
+  for (const [name, v] of Object.entries(raw.links || {}).slice(0, 300)) {
+    if (name && name.length <= 255 && LINK_MEANINGS.includes(v)) out.links[name] = v;
+  }
+  for (const role of FIELD_ROLES) {
+    const id = raw.fields?.[role];
+    if (typeof id === 'string' && FIELD_ID_RE.test(id)) out.fields[role] = id;
+  }
+  return out;
+}
+
+// Fields to request from Jira search for a project with these settings.
+export const searchFields = config => [...SEARCH_FIELDS, ...new Set(Object.values(normalizeConfig(config).fields))];
+
+// Text of a Jira field value: plain text, a select option, a rich text document, or a list of them.
+export function fieldText(v) {
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'string' || typeof v === 'number') return String(v);
+  if (Array.isArray(v)) return v.map(fieldText).filter(Boolean).join(', ');
+  if (typeof v === 'object') return v.type === 'doc' ? adfText(v) : fieldText(v.value ?? v.name ?? '');
+  return '';
+}
+
+const METHOD_PATTERNS = [
+  [/fault|inject/i, 'fault-injection'],
+  [/back[\s-]*to[\s-]*back|b2b/i, 'back-to-back'],
+  [/review|inspect|walk[\s-]*through/i, 'review'],
+];
+const methodFromText = t => (t ? METHOD_PATTERNS.find(([re]) => re.test(t))?.[1] || 'requirements' : null);
+const resultFromText = t => {
+  if (!t) return null;
+  if (/fail|nok|error|block/i.test(t)) return 'fail';
+  return /pass|^ok$|success/i.test(t) ? 'pass' : 'none';
+};
+
 const pick = (v, allowed) => (allowed.includes(norm(v)) ? norm(v) : null);
 
 // Jira returns "+0000"; normalise every date to ISO 8601 UTC.
@@ -90,13 +161,14 @@ export function adfText(node) {
   return (node.content || []).map(adfText).filter(Boolean).join(' ');
 }
 
-function contentChangedAt(issue) {
+function changedAt(issue, matches) {
   let last = null;
   for (const h of issue.changelog?.histories || []) {
-    if ((h.items || []).some(i => i.field === 'summary' || i.field === 'description')) last = latest(last, h.created);
+    if ((h.items || []).some(matches)) last = latest(last, h.created);
   }
   return last;
 }
+const contentChangedAt = issue => changedAt(issue, i => i.field === 'summary' || i.field === 'description');
 
 const REF_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,39}$/;
 const validRef = r => (typeof r === 'string' && REF_RE.test(r.trim()) ? r.trim() : null);
@@ -107,43 +179,65 @@ function stripRef(summary, ref) {
   return s;
 }
 
-function levelOf(issue, prop) {
+// Level: the issue's own property, then tg-* labels, then the project setting for its issue type,
+// then the issue type name.
+function levelOf(issue, prop, config) {
   const own = normalizeLevel(prop.level);
   if (own) return own;
   for (const l of issue.fields?.labels || []) {
     const v = LEVEL_LABELS[norm(l)];
     if (v) return v;
   }
-  const type = issue.fields?.issuetype?.name || '';
-  for (const [re, level] of TYPE_PATTERNS) if (re.test(type)) return level;
-  return null;
+  const mapped = config.levels[issue.fields?.issuetype?.id];
+  if (mapped) return mapped === 'none' ? null : mapped;
+  return guessLevel(issue.fields?.issuetype?.name);
 }
 
-function asilOf(issue, prop) {
-  return normalizeAsil(prop.asil)
-    || (issue.fields?.labels || []).filter(l => /^asil[-_]/i.test(l)).map(normalizeAsil).find(Boolean)
+// A custom field named in the project settings wins when it has a value: it is the team's own data.
+// ASIL: that field, then the property set from the TraceGuard panel, then asil-* labels.
+function asilOf(issue, prop, fieldValue) {
+  return parseAsil(fieldValue)
+    || parseAsil(prop.asil)
+    || (issue.fields?.labels || []).filter(l => /^asil[-_]/i.test(l)).map(parseAsil).find(Boolean)
     || null;
 }
 
-function resultOf(issue, prop) {
+// Test result and when it was recorded: result field, property, then a workflow status named pass/fail.
+function resultOf(issue, prop, fieldValue, fieldId) {
+  const fromField = resultFromText(fieldValue);
+  if (fromField) {
+    return { result: fromField, ranAt: changedAt(issue, i => i.fieldId === fieldId) || isoDate(issue.fields?.updated) };
+  }
   const own = pick(prop.result, RESULTS);
-  if (own) return { result: own, fromStatus: false };
+  if (own) return { result: own, ranAt: isoDate(prop.lastRunAt) };
   const status = norm(issue.fields?.status?.name);
-  if (/pass/.test(status)) return { result: 'pass', fromStatus: true };
-  if (/fail/.test(status)) return { result: 'fail', fromStatus: true };
-  return { result: 'none', fromStatus: false };
+  const ranAt = isoDate(issue.fields?.statuscategorychangedate || issue.fields?.updated);
+  if (/fail/.test(status)) return { result: 'fail', ranAt };
+  if (/pass/.test(status)) return { result: 'pass', ranAt };
+  return { result: 'none', ranAt: null };
 }
 
-// issues: Jira REST v3 search results requested with SEARCH_FIELDS, properties [PROPERTY_KEY] and
-// expand=changelog. Returns the items for the core, the item key -> Jira key map, and what was skipped.
-export function issuesToItems(issues) {
+// What a Jira issue link means: the project setting for its link type, otherwise its wording.
+function linkMeaning(link, config) {
+  const mapped = config.links[link.type?.name];
+  if (mapped === 'none') return null;
+  if (mapped) return { type: mapped, active: Boolean(link.outwardIssue) };
+  return linkSemantics(link.outwardIssue ? link.type?.outward : link.type?.inward);
+}
+
+// issues: Jira REST v3 search results requested with searchFields(config), properties [PROPERTY_KEY] and
+// expand=changelog. config: the project settings (see normalizeConfig).
+// Returns the items for the core, the item key -> Jira key map, and how many issues were skipped.
+export function issuesToItems(issues, rawConfig) {
+  const config = normalizeConfig(rawConfig);
+  const field = (issue, role) => (config.fields[role] ? fieldText(issue.fields?.[config.fields[role]]).trim() : '');
   const rows = [];
   let unclassified = 0;
   for (const issue of issues || []) {
     const prop = (issue.properties && issue.properties[PROPERTY_KEY]) || {};
-    const level = levelOf(issue, prop);
+    const level = levelOf(issue, prop, config);
     if (!level) { unclassified += 1; continue; }
-    rows.push({ issue, prop, level, ref: validRef(prop.ref) });
+    rows.push({ issue, prop, level, ref: validRef(field(issue, 'ref')) || validRef(prop.ref) });
   }
 
   const jiraKeys = new Set(rows.map(r => r.issue.key));
@@ -159,12 +253,13 @@ export function issuesToItems(issues) {
 
   const items = rows.map(r => {
     const f = r.issue.fields || {};
+    const asil = r.level === 'TEST' ? null : asilOf(r.issue, r.prop, field(r.issue, 'asil'));
     const item = {
       key: r.key,
       jiraKey: r.issue.key,
       level: r.level,
       summary: stripRef(f.summary, r.ref),
-      asil: asilOf(r.issue, r.prop) || undefined,
+      asil: asil?.asil || undefined,
       status: f.status?.name,
       updated: latest(r.prop.changedAt, contentChangedAt(r.issue)) || isoDate(f.created) || undefined,
       links: [],
@@ -174,15 +269,14 @@ export function issuesToItems(issues) {
     const allocation = pick(r.prop.allocation, ALLOCATIONS)
       || ((f.labels || []).some(l => norm(l) === 'alloc-hw') ? 'hw' : null);
     if (allocation) item.allocation = allocation;
-    if (typeof r.prop.decomposition === 'string' && r.prop.decomposition.trim()) {
-      item.decomposition = r.prop.decomposition.trim().slice(0, 80);
-    }
+    const decomposition = asil?.decomposition
+      || (typeof r.prop.decomposition === 'string' ? r.prop.decomposition.trim().slice(0, 80) : '');
+    if (decomposition) item.decomposition = decomposition;
     if (r.level === 'TEST') {
-      item.method = pick(r.prop.method, METHODS) || 'requirements';
-      const { result, fromStatus } = resultOf(r.issue, r.prop);
+      item.method = methodFromText(field(r.issue, 'method')) || pick(r.prop.method, METHODS) || 'requirements';
+      const { result, ranAt } = resultOf(r.issue, r.prop, field(r.issue, 'result'), config.fields.result);
       item.result = result;
-      const ran = isoDate(r.prop.lastRunAt) || (fromStatus ? isoDate(f.statuscategorychangedate || f.updated) : null);
-      if (ran) item.lastRunAt = ran;
+      if (ranAt && result !== 'none') item.lastRunAt = ranAt;
     }
     return item;
   });
@@ -215,7 +309,7 @@ export function issuesToItems(issues) {
       const other = link.outwardIssue || link.inwardIssue;
       const otherKey = toItemKey.get(other?.key);
       if (!otherKey) continue; // unclassified or outside the analysed scope
-      const sem = linkSemantics(link.outwardIssue ? link.type?.outward : link.type?.inward);
+      const sem = linkMeaning(link, config);
       if (!sem) continue;
       const edge = sem.active ? orient(sem.type, r.key, otherKey) : orient(sem.type, otherKey, r.key);
       if (edge) addEdge(sem.type, ...edge);

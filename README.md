@@ -84,14 +84,14 @@ electronic brake control unit (2 safety goals, 10 system and 16 software require
 
 | Path | What |
 |---|---|
-| `traceguard/core` | The analysis engine: plain JavaScript, no dependencies, 31 tests (`node --test test/`): rules, the Jira mapping with project settings, baselines and reports. |
+| `traceguard/core` | The analysis engine: plain JavaScript, no dependencies, 31 tests (`node --test`): rules, the Jira mapping with project settings, baselines and reports. |
 | `traceguard/demo` | The brake ECU demo project and a sample audit report. |
 | `app` | The Forge app: manifest, Jira and Confluence UI (UI Kit), resolvers, Rovo actions and agent, MCP server. |
 
 ## Development
 
 ```
-cd traceguard/core && node --test test/
+cd traceguard/core && node --test
 cd ../../app
 npm install
 npm run sync-core          # copy the core and the demo into app/src

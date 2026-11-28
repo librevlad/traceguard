@@ -11,5 +11,5 @@ jobs:
         with:
           node-version: 22
       - name: Analysis engine tests
-        run: node --test test/
+        run: node --test
         working-directory: traceguard/core
